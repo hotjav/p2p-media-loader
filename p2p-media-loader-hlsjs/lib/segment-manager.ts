@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-import {Events, Segment, LoaderInterface} from "p2p-media-loader-core";
-import Utils from "./utils";
+import {Events, Segment, LoaderInterface, XhrSetupCallback} from "p2p-media-loader-core";
 import {Parser} from "m3u8-parser";
 
 const defaultSettings: Settings = {
@@ -23,13 +22,15 @@ const defaultSettings: Settings = {
     swarmId: undefined,
 };
 
+export type Byterange = { length: number, offset: number } | undefined;
+
 export class SegmentManager {
 
-    private loader: LoaderInterface;
+    private readonly loader: LoaderInterface;
     private masterPlaylist: Playlist | null = null;
-    private variantPlaylists: Map<string, Playlist> = new Map();
+    private readonly variantPlaylists: Map<string, Playlist> = new Map();
     private segmentRequest: SegmentRequest | null = null;
-    private playQueue: {segmentSequence: number, segmentUrl: string}[] = [];
+    private playQueue: {segmentSequence: number, segmentUrl: string, segmentByterange: Byterange}[] = [];
     private readonly settings: Settings;
 
     public constructor(loader: LoaderInterface, settings: any = {}) {
@@ -54,11 +55,19 @@ export class SegmentManager {
 
         if (playlist.manifest.playlists) {
             this.masterPlaylist = playlist;
-            this.variantPlaylists.forEach(playlist => playlist.swarmId = this.getSwarmId(playlist.url));
-            // TODO: validate that playlist was not changed
+
+            for (const [key, playlist] of this.variantPlaylists) {
+                const {swarmId, found} = this.getSwarmId(playlist.url);
+                if (!found) {
+                    this.variantPlaylists.delete(key);
+                } else {
+                    playlist.swarmId = swarmId;
+                }
+            }
         } else {
-            const swarmId = this.getSwarmId(url);
-            if (swarmId !== url || !this.masterPlaylist) {
+            const {swarmId, found} = this.getSwarmId(url);
+
+            if (found || !this.masterPlaylist) { // do not add audio and subtitles to variants
                 playlist.swarmId = swarmId;
                 this.variantPlaylists.set(url, playlist);
                 this.updateSegments();
@@ -67,15 +76,16 @@ export class SegmentManager {
     }
 
     public async loadPlaylist(url: string): Promise<string> {
-        const content = await Utils.fetchContentAsText(url);
+        const content = await this.loadContent(url, "text");
         this.processPlaylist(url, content);
         return content;
     }
 
-    public loadSegment(url: string, onSuccess: (content: ArrayBuffer, downloadSpeed: number) => void, onError: (error: any) => void): void {
-        const segmentLocation = this.getSegmentLocation(url);
+    public loadSegment(url: string, byterange: Byterange, onSuccess: (content: ArrayBuffer, downloadSpeed: number) => void, onError: (error: any) => void): void {
+        const segmentLocation = this.getSegmentLocation(url, byterange);
         if (!segmentLocation) {
-            Utils.fetchContentAsArrayBuffer(url)
+            // Not a segment from variants; usually can be: init, audio or subtitles segment, encription key etc.
+            this.loadContent(url, "arraybuffer", byterangeToString(byterange))
                 .then((content: ArrayBuffer) => onSuccess(content, 0))
                 .catch((error: any) => onError(error));
             return;
@@ -96,21 +106,24 @@ export class SegmentManager {
             this.segmentRequest.onError("Cancel segment request: simultaneous segment requests are not supported");
         }
 
-        this.segmentRequest = new SegmentRequest(url, segmentSequence, segmentLocation.playlist.url, onSuccess, onError);
-        this.playQueue.push({segmentUrl: url, segmentSequence: segmentSequence});
+        this.segmentRequest = new SegmentRequest(url, byterange, segmentSequence, segmentLocation.playlist.url, onSuccess, onError);
+        this.playQueue.push({segmentUrl: url, segmentByterange: byterange, segmentSequence: segmentSequence});
         this.loadSegments(segmentLocation.playlist, segmentLocation.segmentIndex, true);
     }
 
-    public setPlayingSegment(url: string): void {
-        const urlIndex = this.playQueue.findIndex(segment => segment.segmentUrl == url);
+    public setPlayingSegment(url: string, byterange: Byterange): void {
+        const urlIndex = this.playQueue.findIndex(segment =>
+                (segment.segmentUrl == url) && compareByterange(segment.segmentByterange, byterange));
+
         if (urlIndex >= 0) {
             this.playQueue = this.playQueue.slice(urlIndex);
             this.updateSegments();
         }
     }
 
-    public abortSegment(url: string): void {
-        if (this.segmentRequest && this.segmentRequest.segmentUrl === url) {
+    public abortSegment(url: string, byterange: Byterange): void {
+        if (this.segmentRequest && (this.segmentRequest.segmentUrl === url) &&
+                compareByterange(this.segmentRequest.segmentByterange, byterange)) {
             this.segmentRequest = null;
         }
     }
@@ -133,7 +146,7 @@ export class SegmentManager {
             return;
         }
 
-        const segmentLocation = this.getSegmentLocation(this.segmentRequest.segmentUrl);
+        const segmentLocation = this.getSegmentLocation(this.segmentRequest.segmentUrl, this.segmentRequest.segmentByterange);
         if (segmentLocation) {
             this.loadSegments(segmentLocation.playlist, segmentLocation.segmentIndex, false);
         } else { // the segment not found in current playlist
@@ -141,37 +154,39 @@ export class SegmentManager {
             if (playlist) {
                 this.loadSegments(playlist, 0, false, {
                     url: this.segmentRequest.segmentUrl,
+                    byterange: this.segmentRequest.segmentByterange,
                     sequence: this.segmentRequest.segmentSequence});
             }
         }
     }
 
     private onSegmentLoaded = (segment: Segment) => {
-        if (this.segmentRequest && this.segmentRequest.segmentUrl === segment.url) {
+        if (this.segmentRequest && (this.segmentRequest.segmentUrl === segment.url) &&
+                (byterangeToString(this.segmentRequest.segmentByterange) === segment.range)) {
             this.segmentRequest.onSuccess(segment.data!.slice(0), segment.downloadSpeed);
             this.segmentRequest = null;
         }
     }
 
     private onSegmentError = (segment: Segment, error: any) => {
-        if (this.segmentRequest && this.segmentRequest.segmentUrl === segment.url) {
+        if (this.segmentRequest && (this.segmentRequest.segmentUrl === segment.url) &&
+                (byterangeToString(this.segmentRequest.segmentByterange) === segment.range)) {
             this.segmentRequest.onError(error);
             this.segmentRequest = null;
         }
     }
 
     private onSegmentAbort = (segment: Segment) => {
-        if (this.segmentRequest && this.segmentRequest.segmentUrl === segment.url) {
+        if (this.segmentRequest && (this.segmentRequest.segmentUrl === segment.url) &&
+                (byterangeToString(this.segmentRequest.segmentByterange) === segment.range)) {
             this.segmentRequest.onError("Loading aborted: internal abort");
             this.segmentRequest = null;
         }
     }
 
-    private getSegmentLocation(url: string): { playlist: Playlist, segmentIndex: number } | undefined {
-        const entries = this.variantPlaylists.values();
-        for (let entry = entries.next(); !entry.done; entry = entries.next()) {
-            const playlist = entry.value;
-            const segmentIndex = playlist.getSegmentIndex(url);
+    private getSegmentLocation(url: string, byterange: Byterange): { playlist: Playlist, segmentIndex: number } | undefined {
+        for (const playlist of this.variantPlaylists.values()) {
+            const segmentIndex = playlist.getSegmentIndex(url, byterange);
             if (segmentIndex >= 0) {
                 return { playlist: playlist, segmentIndex: segmentIndex };
             }
@@ -180,7 +195,7 @@ export class SegmentManager {
         return undefined;
     }
 
-    private loadSegments(playlist: Playlist, segmentIndex: number, requestFirstSegment: boolean, notInPlaylistSegment?: {url: string, sequence: number}): void {
+    private loadSegments(playlist: Playlist, segmentIndex: number, requestFirstSegment: boolean, notInPlaylistSegment?: {url: string, byterange: Byterange, sequence: number}): void {
         const segments: Segment[] = [];
         const playlistSegments: any[] = playlist.manifest.segments;
         const initialSequence: number = playlist.manifest.mediaSequence ? playlist.manifest.mediaSequence : 0;
@@ -191,7 +206,7 @@ export class SegmentManager {
         if (notInPlaylistSegment) {
             const url = playlist.getSegmentAbsoluteUrl(notInPlaylistSegment.url);
             const id = this.getSegmentId(playlist, notInPlaylistSegment.sequence);
-            segments.push(new Segment(id, url, undefined, priority++));
+            segments.push(new Segment(id, url, byterangeToString(notInPlaylistSegment.byterange), priority++));
 
             if (requestFirstSegment) {
                 loadSegmentId = id;
@@ -199,9 +214,12 @@ export class SegmentManager {
         }
 
         for (let i = segmentIndex; i < playlistSegments.length && segments.length < this.settings.forwardSegmentCount; ++i) {
-            const url = playlist.getSegmentAbsoluteUrlByIndex(i);
+            const segment = playlist.manifest.segments[i];
+
+            const url = playlist.getSegmentAbsoluteUrl(segment.uri);
+            const byterange: Byterange = segment.byterange;
             const id = this.getSegmentId(playlist, initialSequence + i);
-            segments.push(new Segment(id, url, undefined, priority++));
+            segments.push(new Segment(id, url, byterangeToString(byterange), priority++));
 
             if (requestFirstSegment && !loadSegmentId) {
                 loadSegmentId = id;
@@ -222,23 +240,52 @@ export class SegmentManager {
         return `${playlist.swarmId}+${segmentSequence}`;
     }
 
-    private getSwarmId(playlistUrl: string): string {
+    private getSwarmId(playlistUrl: string): {swarmId: string, found: boolean} {
+        const swarmId = (this.settings.swarmId && (this.settings.swarmId.length !== 0)) ? this.settings.swarmId : undefined;
+
         if (this.masterPlaylist) {
-            const masterSwarmId = (this.settings.swarmId && (this.settings.swarmId.length !== 0)) ?
-                    this.settings.swarmId : this.masterPlaylist.url.split("?")[0];
+            const masterSwarmId = (swarmId ? swarmId : this.masterPlaylist.url.split("?")[0]);
 
             for (let i = 0; i < this.masterPlaylist.manifest.playlists.length; ++i) {
                 const url = new URL(this.masterPlaylist.manifest.playlists[i].uri, this.masterPlaylist.url).toString();
                 if (url === playlistUrl) {
-                    return `${masterSwarmId}+V${i}`;
+                    return {swarmId: `${masterSwarmId}+V${i}`, found: true};
                 }
             }
         }
 
-        return playlistUrl;
+        return {swarmId: swarmId ? swarmId : playlistUrl, found: false};
     }
 
-} // end of SegmentManager
+    private async loadContent(url: string, responseType: XMLHttpRequestResponseType, range?: string): Promise<any> {
+        return new Promise<string>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", url, true);
+            xhr.responseType = responseType;
+
+            if (range) {
+                xhr.setRequestHeader("Range", range);
+            }
+
+            xhr.addEventListener("readystatechange", () => {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    resolve(xhr.response);
+                } else {
+                    reject(xhr.statusText);
+                }
+            });
+
+            const xhrSetup: XhrSetupCallback = this.loader.getSettings().xhrSetup;
+            if (xhrSetup) {
+                xhrSetup(xhr, url);
+            }
+
+            xhr.send();
+        });
+    }
+
+}
 
 class Playlist {
     public swarmId: string = "";
@@ -250,18 +297,17 @@ class Playlist {
         }
     }
 
-    public getSegmentIndex(url: string): number {
+    public getSegmentIndex(url: string, byterange: Byterange): number {
         for (let i = 0; i < this.manifest.segments.length; ++i) {
-            if (url === this.getSegmentAbsoluteUrlByIndex(i)) {
+            const segment = this.manifest.segments[i];
+            const segmentUrl = this.getSegmentAbsoluteUrl(segment.uri);
+
+            if ((url === segmentUrl) && compareByterange(segment.byterange, byterange)) {
                 return i;
             }
         }
 
         return -1;
-    }
-
-    public getSegmentAbsoluteUrlByIndex(index: number): string {
-        return this.getSegmentAbsoluteUrl(this.manifest.segments[index].uri);
     }
 
     public getSegmentAbsoluteUrl(segmentUrl: string): string {
@@ -272,6 +318,7 @@ class Playlist {
 class SegmentRequest {
     public constructor(
         readonly segmentUrl: string,
+        readonly segmentByterange: Byterange,
         readonly segmentSequence: number,
         readonly playlistUrl: string,
         readonly onSuccess: (content: ArrayBuffer, downloadSpeed: number) => void,
@@ -289,5 +336,21 @@ interface Settings {
      * Override default swarm ID that is used to identify unique media stream with trackers (manifest URL without
      * query parameters is used as the swarm ID if the parameter is not specified)
      */
-    swarmId: string | undefined;
+    swarmId?: string;
+}
+
+function compareByterange(b1: Byterange, b2: Byterange) {
+    return (b1 === undefined)
+        ? (b2 === undefined)
+        : ((b2 !== undefined) && (b1.length === b2.length) && (b1.offset === b2.offset));
+}
+
+function byterangeToString(byterange: Byterange): string | undefined {
+    if (byterange === undefined) {
+        return undefined;
+    }
+
+    const end = byterange.offset + byterange.length - 1;
+
+    return `bytes=${byterange.offset}-${end}`;
 }

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-if (!window.p2pml) {
-    window.p2pml = {};
+declare class XMLHttpRequest {
+    [key: string]: any;
 }
 
-window.p2pml.shaka = require("p2p-media-loader-shaka");
+type XMLHttpRequestResponseType = "" | "arraybuffer" | "blob" | "document" | "json" | "text";

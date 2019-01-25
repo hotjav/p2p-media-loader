@@ -14,9 +14,8 @@
  * limitations under the License.
  */
 
-/// <reference path="../node_modules/@types/mocha/index.d.ts" />
-/// <reference path="../node_modules/typescript/lib/lib.es2015.d.ts" />
-/// <reference path="../node_modules/typescript/lib/lib.dom.d.ts" />
+/// <reference path="../lib/declarations.d.ts" />
+/// <reference types="mocha" />
 
 import {SpeedApproximator} from "../lib/speed-approximator";
 import * as assert from "assert";

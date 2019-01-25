@@ -49,8 +49,10 @@ If `settings` is specified, then the default settings (shown below) will be over
 | `bufferedSegmentsCount` | Integer | 20 | Max number of the segments to be downloaded via HTTP or P2P methods
 | `trackerAnnounce` | String[] | [ "wss://tracker.btorrent.xyz/", "wss://tracker.openwebtorrent.com/" ] | Torrent trackers (announcers) to use
 | `webRtcMaxMessageSize` | Integer | 64 * 1024 - 1 | Max WebRTC message size. 64KiB - 1B should work with most of recent browsers. Set it to 16KiB for older browsers support.
-| `p2pSegmentDownloadTimeout` | Integer | 60000 | Timeout to download a segment from a peer. If exceeded the peer is dropped.
+| `p2pSegmentDownloadTimeout` | Integer | 60000 | Time allowed for a segment to start downloading. This value only limits time needed for segment to start, not the time required for full download.
+| `segmentValidator` | Function | undefined | Segment validation callback - validates the data after it has been downloaded.<br><br>Arguments:<br>`segment` (Segment) - The segment object.<br>`method` (String) - Can be "http" or "p2p" only.<br>`peerId` (String) - The ID of the peer that the segment was downloaded from in case it is P2P download; and *undefined* for HTTP donwload.<br><br>Returns:<br>A promise - if resolved the segment considered to be valid, if rejected the error object will be passed to `SegmentError` event.
 | `rtcConfig` | [RTCConfiguration](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/RTCPeerConnection#RTCConfiguration_dictionary) | Object | An [RTCConfiguration](https://developer.mozilla.org/en-US/docs/Web/API/RTCPeerConnection/RTCPeerConnection#RTCConfiguration_dictionary) dictionary providing options to configure WebRTC connections.
+| `xhrSetup` | Function | undefined | XMLHttpRequest setup callback. Handle it when you need additional setup for requests made by the library. If handled, expected a function with two arguments: xhr (XMLHttpRequest), url (String).
 
 ### `loader.load(segments, swarmId)`
 
@@ -60,20 +62,22 @@ Function args:
 - `segments` - array of `Segment` class instances with populated `url` and `priority` field;
 - `swarmId` - used for gathering peers in pool;
 
-### `loader.on(Events.SegmentLoaded, function (segment) {})`
+### `loader.on(Events.SegmentLoaded, function (segment, peerId) {})`
 
 Emitted when segment have been downloaded.
 
 Listener args:
 - `segment` - instance of `Segment` class with populated `url` and `data` fields;
+- `peerId` - Id of the peer the segment was downloaded from; `undefined` for HTTP method;
 
-### `loader.on(Events.SegmentError, function (segment, error) {})`
+### `loader.on(Events.SegmentError, function (segment, error, peerId) {})`
 
 Emitted when an error occurred while loading the segment.
 
 Listener args:
 - `segment` - url of the segment;
 - `error` - error details;
+- `peerId` - Id of the peer the error occured with; `undefined` for HTTP method;
 
 ### `loader.on(Events.SegmentAbort, function (segment) {})`
 
@@ -96,13 +100,14 @@ Emitted when a peer is disconnected.
 Listener args:
 - `peerId` - Id of the disconnected peer;
 
-### `loader.on(Events.PieceBytesDownloaded, function (method, bytes) {})`
+### `loader.on(Events.PieceBytesDownloaded, function (method, bytes, peerId) {})`
 
 Emitted when a segment piece downloaded.
 
 Listener args:
 - `method` - downloading method, possible values: `http`, `p2p`;
 - `bytes` - amount of bytes downloaded;
+- `peerId` - Id of the peer these bytes downloaded from; `undefined` for HTTP method;
 
 ### `loader.on(Events.PieceBytesUploaded, function (method, bytes) {})`
 
@@ -110,11 +115,16 @@ Emitted when a segment piece uploaded.
 
 Listener args:
 - `method` - uploading method, possible values: `p2p`;
-- `bytes` - amount of bytes downloaded;
+- `bytes` - amount of bytes uploaded;
+- `peerId` - Id of the peer these bytes uploaded to; `undefined` for HTTP method;
 
 ### `loader.getSettings()`
 
 Returns loader instance settings.
+
+### `loader.getDetails()`
+
+Returns loader instance details.
 
 ### `loader.getSegment(id)`
 
@@ -133,13 +143,13 @@ Destroys loader: abort all connections (http, tcp, peer), clears cached segments
 
 Events that are emitted by `HybridLoader`.
 
-- SegmentLoaded
-- SegmentError
-- SegmentAbort
-- PeerConnect
-- PeerClose
-- PieceBytesDownloaded
-- PieceBytesUploaded
+- [SegmentLoaded](#loaderoneventssegmentloaded-function-segment-peerid-)
+- [SegmentError](#loaderoneventssegmenterror-function-segment-error-peerid-)
+- [SegmentAbort](#loaderoneventssegmentabort-function-segment-)
+- [PeerConnect](#loaderoneventspeerconnect-function-peer-)
+- [PeerClose](#loaderoneventspeerclose-function-peerid-)
+- [PieceBytesDownloaded](#loaderoneventspiecebytesdownloaded-function-method-bytes-peerid-)
+- [PieceBytesUploaded](#loaderoneventspiecebytesuploaded-function-method-bytes-peerid-)
 
 ---
 

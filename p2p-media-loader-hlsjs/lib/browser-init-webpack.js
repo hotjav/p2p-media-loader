@@ -1,5 +1,4 @@
 /**
- * @license
  * Copyright 2018 Novage LLC.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as p2pMediaLoaderHlsjs from './index';
+import * as p2pMediaLoaderHlsjs from "./index";
 
 if (!window.p2pml) {
     window.p2pml = {};

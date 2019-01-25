@@ -10,7 +10,7 @@ Useful links:
 - [Technical overview](http://novage.com.ua/p2p-media-loader/technical-overview.html)
 - JS CDN
   - [Core](https://cdn.jsdelivr.net/npm/p2p-media-loader-core@latest/build/)
-  - [Shaka integration](https://cdn.jsdelivr.net/npm/p2p-media-loader-shaka@latest/build/)
+  - [Shaka Player integration](https://cdn.jsdelivr.net/npm/p2p-media-loader-shaka@latest/build/)
   - [Hls.js integration](https://cdn.jsdelivr.net/npm/p2p-media-loader-hlsjs@latest/build/)
 
 ## Basic usage
@@ -84,9 +84,20 @@ Creates a new `Engine` instance.
 - `loader`
     + settings for `HybridLoader` (see [P2P Media Loader Core API](../p2p-media-loader-core/README.md#loader--new-hybridloadersettings) for details);
 
+### `engine.on(event, handler)`
+
+Registers an event handler.
+
+- `event` - Event you want to handle; available events you can find [here](../p2p-media-loader-core/README.md#events).
+- `handler` - Function to handle the event
+
 ### `engine.getSettings()`
 
 Returns engine instance settings.
+
+### `engine.getDetails()`
+
+Returns engine instance details.
 
 ### `engine.destroy()`
 

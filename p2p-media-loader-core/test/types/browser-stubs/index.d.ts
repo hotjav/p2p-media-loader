@@ -14,8 +14,20 @@
  * limitations under the License.
  */
 
-if (!window.p2pml) {
-    window.p2pml = {};
+declare class RTCConfiguration {
 }
 
-window.p2pml.shaka = require("p2p-media-loader-shaka");
+declare class XMLHttpRequest {
+    [key: string]: any;
+}
+
+declare class TextEncoder {
+    [key: string]: any;
+}
+
+declare class TextDecoder {
+    [key: string]: any;
+}
+
+declare const performance: any;
+declare const crypto: any;

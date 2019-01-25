@@ -1,20 +1,20 @@
 {
   "compilerOptions": {
-    "target": "es5",
+    "target": "es6",
     "module": "commonjs",
-    "lib": ["dom", "es6"],
     "strict": true,
     "moduleResolution": "node",
     "declaration": true,
     "outDir": "./dist",
     "noUnusedLocals": true,
     "noUnusedParameters": false,
-    "noImplicitThis": true,
-    "noImplicitAny": true,
     "strictNullChecks": true,
     "forceConsistentCasingInFileNames": true,
     "noFallthroughCasesInSwitch": true,
-    "noImplicitReturns": true
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noImplicitAny": true,
+    "types": []
   },
   "compileOnSave": true,
   "include": [

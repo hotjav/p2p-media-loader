@@ -20,4 +20,8 @@ declare module "bittorrent-tracker" {
     export default Client;
 }
 
+declare module "get-browser-rtc";
+declare module "simple-peer";
+declare module "sha.js/sha1";
+
 declare const __P2PML_VERSION__: string;

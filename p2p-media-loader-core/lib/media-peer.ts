@@ -16,6 +16,7 @@
 
 import * as Debug from "debug";
 import STEEmitter from "./stringly-typed-event-emitter";
+import {Buffer} from "buffer";
 
 enum MediaPeerCommands {
     SegmentData = "segment_data",
@@ -47,8 +48,7 @@ export class MediaPeer extends STEEmitter<
     private downloadingSegment: DownloadingSegment | null = null;
     private segmentsMap = new Map<string, MediaPeerSegmentStatus>();
     private debug = Debug("p2pml:media-peer");
-    private timer: number | null = null;
-    private isSafari11_0: boolean = false;
+    private timer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(readonly peer: any,
             readonly settings: {
@@ -63,22 +63,6 @@ export class MediaPeer extends STEEmitter<
         this.peer.on("data", (data: any) => this.onPeerData(data));
 
         this.id = peer.id;
-
-        this.detectSafari11_0();
-    }
-
-    private detectSafari11_0() {
-        const userAgent: string = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
-        const isSafari = userAgent.indexOf("Safari") != -1 && userAgent.indexOf("Chrome") == -1;
-        if (isSafari) {
-            const match = userAgent.match(/version\/(\d+(\.\d+)?)/i);
-            const version = (match && match.length > 1 && match[1]) || "";
-            if (version === "11.0") {
-                this.isSafari11_0 = true;
-                this.debug("enable workaround for Safari 11.0");
-                return;
-            }
-        }
     }
 
     private onPeerConnect(): void {
@@ -102,7 +86,7 @@ export class MediaPeer extends STEEmitter<
 
         this.downloadingSegment.bytesDownloaded += data.byteLength;
         this.downloadingSegment.pieces.push(data);
-        this.emit("bytes-downloaded", data.byteLength);
+        this.emit("bytes-downloaded", this, data.byteLength);
 
         const segmentId = this.downloadingSegment.id;
 
@@ -130,7 +114,7 @@ export class MediaPeer extends STEEmitter<
         // Serialized JSON string check by first, second and last characters: '{" .... }'
         if (bytes[0] == 123 && bytes[1] == 34 && bytes[data.byteLength - 1] == 125) {
             try {
-                return JSON.parse(new TextDecoder("utf-8").decode(data));
+                return JSON.parse(new TextDecoder().decode(data));
             } catch {
             }
         }
@@ -224,15 +208,13 @@ export class MediaPeer extends STEEmitter<
         let bytesLeft = data.byteLength;
         while (bytesLeft > 0) {
             const bytesToSend = (bytesLeft >= this.settings.webRtcMaxMessageSize ? this.settings.webRtcMaxMessageSize : bytesLeft);
-            const buffer = this.isSafari11_0 ?
-                Buffer.from(data.slice(data.byteLength - bytesLeft, data.byteLength - bytesLeft + bytesToSend)) : // workaround for Safari 11.0 bug: https://bugs.webkit.org/show_bug.cgi?id=173052
-                Buffer.from(data, data.byteLength - bytesLeft, bytesToSend); // avoid memory copying
+            const buffer = Buffer.from(data, data.byteLength - bytesLeft, bytesToSend);
 
             this.peer.write(buffer);
             bytesLeft -= bytesToSend;
         }
 
-        this.emit("bytes-uploaded", data.byteLength);
+        this.emit("bytes-uploaded", this, data.byteLength);
     }
 
     public sendSegmentAbsent(segmentId: string): void {
@@ -258,7 +240,7 @@ export class MediaPeer extends STEEmitter<
     }
 
     private runResponseTimeoutTimer(): void {
-        this.timer = window.setTimeout(() => {
+        this.timer = setTimeout(() => {
             this.timer = null;
             if (!this.downloadingSegmentId) {
                 return;

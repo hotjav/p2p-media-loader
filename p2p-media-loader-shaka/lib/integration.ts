@@ -19,10 +19,6 @@ import {SegmentManager} from "./segment-manager";
 import {ShakaManifestParserProxy, ShakaDashManifestParserProxy, ShakaHlsManifestParserProxy} from "./manifest-parser-proxy";
 import {getSchemedUri} from "./utils";
 
-declare const shaka: any;
-declare const setInterval: any;
-declare const clearInterval: any;
-
 const debug = Debug("p2pml:shaka:index");
 
 export function initShakaPlayer(player: any, segmentManager: SegmentManager) {
@@ -51,7 +47,7 @@ export function initShakaPlayer(player: any, segmentManager: SegmentManager) {
             const time = getPlayheadTime(player);
             if (time !== lastPlayheadTimeReported || player.isBuffering()) {
                 segmentManager.setPlayheadTime(time);
-               lastPlayheadTimeReported = time;
+                lastPlayheadTimeReported = time;
             }
         }, 500);
     });
@@ -82,7 +78,7 @@ function processNetworkRequest(uri: string, request: any, requestType: number) {
         return shaka.net.HttpXHRPlugin(uri, request, requestType);
     }
 
-    const {player, segmentManager} = request.p2pml;
+    const { player, segmentManager }: { player: any, segmentManager: SegmentManager } = request.p2pml;
 
     const manifest = player.getManifest();
     if (!manifest || !manifest.p2pml) {
@@ -95,23 +91,13 @@ function processNetworkRequest(uri: string, request: any, requestType: number) {
         return shaka.net.HttpXHRPlugin(uri, request, requestType);
     }
 
-    let rejectCallback: any = null;
-
     debug("request", "load", segment.identity);
-    const promise = new Promise((resolve, reject) => {
-        rejectCallback = reject;
-        segmentManager
-            .load(segment, getSchemedUri(player.getManifestUri()), getPlayheadTime(player))
-            .then((data: any) => resolve({ data }));
-    });
 
-    const abort = () => {
+    const promise = segmentManager.load(segment, getSchemedUri(player.getManifestUri()), getPlayheadTime(player));
+
+    const abort = async () => {
         debug("request", "abort", segment.identity);
-        return rejectCallback(new shaka.util.Error(
-            shaka.util.Error.Severity.RECOVERABLE,
-            shaka.util.Error.Category.NETWORK,
-            shaka.util.Error.Code.OPERATION_ABORTED
-        ));
+        // TODO: implement abort in SegmentManager
     };
 
     return new shaka.util.AbortableOperation(promise, abort);

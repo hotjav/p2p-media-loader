@@ -1,8 +1,7 @@
 {
   "compilerOptions": {
-    "target": "es5",
+    "target": "es6",
     "module": "commonjs",
-    "lib": ["dom", "es6"],
     "strict": true,
     "moduleResolution": "node",
     "declaration": true,
@@ -14,7 +13,8 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
     "noImplicitThis": true,
-    "noImplicitAny": true
+    "noImplicitAny": true,
+    "types": []
   },
   "include": [
     "lib/**/*",

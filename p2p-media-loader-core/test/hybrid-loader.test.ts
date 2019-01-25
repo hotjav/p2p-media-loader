@@ -14,11 +14,8 @@
  * limitations under the License.
  */
 
-/// <reference path="../node_modules/@types/mocha/index.d.ts" />
-/// <reference path="../node_modules/@types/node/index.d.ts" />
-/// <reference path="../node_modules/typescript/lib/lib.es2015.d.ts" />
-/// <reference path="../node_modules/typescript/lib/lib.dom.d.ts" />
 /// <reference path="../lib/declarations.d.ts" />
+/// <reference types="mocha" />
 
 import {HttpMediaManager} from "../lib/http-media-manager";
 import HybridLoader from "../lib/hybrid-loader";
@@ -38,8 +35,11 @@ describe("HybridLoader", () => {
     when(httpMediaManger.abort(anyOfClass(Segment))).thenCall((segment) => {
         httpDownloads.delete(segment.id);
     });
-    when(httpMediaManger.getActiveDownloads()).thenCall(() => {
-        return httpDownloads;
+    when(httpMediaManger.getActiveDownloadsCount()).thenCall(() => {
+        return httpDownloads.size;
+    });
+    when(httpMediaManger.getActiveDownloadsKeys()).thenCall(() => {
+        return [ ...httpDownloads.keys() ];
     });
     when(httpMediaManger.isDownloading(anyOfClass(Segment))).thenCall((segment) => {
         return httpDownloads.has(segment.id);
@@ -82,7 +82,6 @@ describe("HybridLoader", () => {
     it("load", () => {
 
         const settings = {
-            segmentIdGenerator: (url: string): string => url,
             cachedSegmentExpiration: 5 * 60 * 1000,
             cachedSegmentsCount: 20,
             requiredSegmentsPriority: 1,

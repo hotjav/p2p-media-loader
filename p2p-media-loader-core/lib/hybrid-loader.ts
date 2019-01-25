@@ -16,7 +16,7 @@
 
 import * as Debug from "debug";
 
-import {LoaderInterface, Events, Segment} from "./loader-interface";
+import {LoaderInterface, Events, Segment, SegmentValidatorCallback, XhrSetupCallback} from "./loader-interface";
 import {EventEmitter} from "events";
 import {HttpMediaManager} from "./http-media-manager";
 import {P2PMediaManager} from "./p2p-media-manager";
@@ -24,7 +24,8 @@ import {MediaPeerSegmentStatus} from "./media-peer";
 import {SegmentInternal} from "./segment-internal";
 import {SpeedApproximator} from "./speed-approximator";
 
-const getBrowserRtc = require("get-browser-rtc");
+import * as getBrowserRTC from "get-browser-rtc";
+import * as Peer from "simple-peer";
 
 const defaultSettings: Settings = {
     cachedSegmentExpiration: 5 * 60 * 1000,
@@ -39,8 +40,8 @@ const defaultSettings: Settings = {
 
     webRtcMaxMessageSize: 64 * 1024 - 1,
     p2pSegmentDownloadTimeout: 60000,
-    trackerAnnounce: ["wss://tracker.btorrent.xyz/", "wss://tracker.openwebtorrent.com/"],
-    rtcConfig: require("simple-peer").config
+    trackerAnnounce: ["wss://tracker.btorrent.xyz", "wss://tracker.openwebtorrent.com", "wss://tracker.fastcast.nz"],
+    rtcConfig: (Peer as any).config
 };
 
 export default class HybridLoader extends EventEmitter implements LoaderInterface {
@@ -55,7 +56,7 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
     private readonly settings: Settings;
 
     public static isSupported(): boolean {
-        const browserRtc = getBrowserRtc();
+        const browserRtc = (getBrowserRTC as Function)();
         return (browserRtc && (browserRtc.RTCPeerConnection.prototype.createDataChannel !== undefined));
     }
 
@@ -74,14 +75,14 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
         this.p2pManager.on("segment-loaded", this.onSegmentLoaded);
         this.p2pManager.on("segment-error", this.onSegmentError);
         this.p2pManager.on("peer-data-updated", () => this.processSegmentsQueue());
-        this.p2pManager.on("bytes-downloaded", (bytes: number) => this.onPieceBytesDownloaded("p2p", bytes));
-        this.p2pManager.on("bytes-uploaded", (bytes: number) => this.onPieceBytesUploaded("p2p", bytes));
+        this.p2pManager.on("bytes-downloaded", (bytes: number, peerId: string) => this.onPieceBytesDownloaded("p2p", bytes, peerId));
+        this.p2pManager.on("bytes-uploaded", (bytes: number, peerId: string) => this.onPieceBytesUploaded("p2p", bytes, peerId));
         this.p2pManager.on("peer-connected", this.onPeerConnect);
         this.p2pManager.on("peer-closed", this.onPeerClose);
     }
 
     private createHttpManager() {
-        return new HttpMediaManager();
+        return new HttpMediaManager(this.settings);
     }
 
     private createP2PManager() {
@@ -141,6 +142,12 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
         return this.settings;
     }
 
+    public getDetails() {
+        return {
+            peerId: this.p2pManager.getPeerId()
+        };
+    }
+
     public destroy(): void {
         this.segmentsQueue = [];
         this.httpManager.destroy();
@@ -172,14 +179,14 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
 
             if (!this.segments.has(segment.id)) {
                 if (segmentPriority <= this.settings.requiredSegmentsPriority) {
-                    if (segmentPriority == 0 && !this.httpManager.isDownloading(segment) && this.httpManager.getActiveDownloads().size > 0) {
+                    if (segmentPriority == 0 && !this.httpManager.isDownloading(segment) && this.httpManager.getActiveDownloadsCount() > 0) {
                         for (const s of this.segmentsQueue) {
                             this.httpManager.abort(s);
                             updateSegmentsMap = true;
                         }
                     }
 
-                    if (this.httpManager.getActiveDownloads().size == 0) {
+                    if (this.httpManager.getActiveDownloadsCount() == 0) {
                         this.p2pManager.abort(segment);
                         this.httpManager.download(segment);
                         this.debug("HTTP download (priority)", segment.priority, segment.url);
@@ -192,12 +199,12 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
                 }
             }
 
-            if (this.httpManager.getActiveDownloads().size == 1 && this.p2pManager.getActiveDownloadsCount() == this.settings.simultaneousP2PDownloads) {
+            if (this.httpManager.getActiveDownloadsCount() == 1 && this.p2pManager.getActiveDownloadsCount() == this.settings.simultaneousP2PDownloads) {
                 return updateSegmentsMap;
             }
         }
 
-        if (this.httpManager.getActiveDownloads().size > 0) {
+        if (this.httpManager.getActiveDownloadsCount() > 0) {
             return updateSegmentsMap;
         }
 
@@ -236,17 +243,17 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
         return updateSegmentsMap;
     }
 
-    private onPieceBytesDownloaded = (method: "http" | "p2p", bytes: number) => {
+    private onPieceBytesDownloaded = (method: "http" | "p2p", bytes: number, peerId?: string) => {
         this.speedApproximator.addBytes(bytes, this.now());
-        this.emit(Events.PieceBytesDownloaded, method, bytes);
+        this.emit(Events.PieceBytesDownloaded, method, bytes, peerId);
     }
 
-    private onPieceBytesUploaded = (method: "p2p", bytes: number) => {
+    private onPieceBytesUploaded = (method: "p2p", bytes: number, peerId?: string) => {
         this.speedApproximator.addBytes(bytes, this.now());
-        this.emit(Events.PieceBytesUploaded, method, bytes);
+        this.emit(Events.PieceBytesUploaded, method, bytes, peerId);
     }
 
-    private onSegmentLoaded = (segment: Segment, data: ArrayBuffer) => {
+    private onSegmentLoaded = (segment: Segment, data: ArrayBuffer, peerId?: string) => {
         this.debug("segment loaded", segment.id, segment.url);
 
         const segmentInternal = new SegmentInternal(
@@ -259,17 +266,17 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
         );
 
         this.segments.set(segment.id, segmentInternal);
-        this.emitSegmentLoaded(segmentInternal);
+        this.emitSegmentLoaded(segmentInternal, peerId);
         this.processSegmentsQueue();
         this.p2pManager.sendSegmentsMapToAll(this.createSegmentsMap());
     }
 
-    private onSegmentError = (segment: Segment, event: any) => {
-        this.emit(Events.SegmentError, segment, event);
+    private onSegmentError = (segment: Segment, details: any, peerId?: string) => {
+        this.emit(Events.SegmentError, segment, details, peerId);
         this.processSegmentsQueue();
     }
 
-    private emitSegmentLoaded(segmentInternal: SegmentInternal): void {
+    private emitSegmentLoaded(segmentInternal: SegmentInternal, peerId?: string): void {
         segmentInternal.lastAccessed = this.now();
 
         const segment = new Segment(
@@ -281,13 +288,13 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
             segmentInternal.downloadSpeed
         );
 
-        this.emit(Events.SegmentLoaded, segment);
+        this.emit(Events.SegmentLoaded, segment, peerId);
     }
 
     private createSegmentsMap(): string[][] {
         const segmentsMap: string[][] = [];
         this.segments.forEach((value, key) => segmentsMap.push([key, MediaPeerSegmentStatus.Loaded]));
-        this.httpManager.getActiveDownloads().forEach((value, key) => segmentsMap.push([key, MediaPeerSegmentStatus.LoadingByHttp]));
+        this.httpManager.getActiveDownloadsKeys().forEach(key => segmentsMap.push([key, MediaPeerSegmentStatus.LoadingByHttp]));
         return segmentsMap;
     }
 
@@ -306,13 +313,14 @@ export default class HybridLoader extends EventEmitter implements LoaderInterfac
 
         // Delete old segments
         const now = this.now();
-        this.segments.forEach(segment => {
+
+        for (const segment of this.segments.values()) {
             if (now - segment.lastAccessed > this.settings.cachedSegmentExpiration) {
                 segmentsToDelete.push(segment.id);
             } else {
                 remainingSegments.push(segment);
             }
-        });
+        }
 
         // Delete segments over cached count
         let countOverhead = remainingSegments.length - this.settings.cachedSegmentsCount;
@@ -392,6 +400,11 @@ interface Settings {
     p2pSegmentDownloadTimeout: number;
 
     /**
+     * Segment validation callback - validates the data after it has been downloaded.
+     */
+    segmentValidator?: SegmentValidatorCallback;
+
+    /**
      * Torrent trackers (announcers) to use.
      */
     trackerAnnounce: string[];
@@ -400,4 +413,9 @@ interface Settings {
      * An RTCConfiguration dictionary providing options to configure WebRTC connections.
      */
     rtcConfig: any;
+
+    /**
+     * XMLHttpRequest setup callback. Handle it when you need additional setup for requests made by the library.
+     */
+    xhrSetup?: XhrSetupCallback;
 }

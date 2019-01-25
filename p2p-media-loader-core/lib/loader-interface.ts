@@ -18,9 +18,9 @@ export class Segment {
     public constructor(
         readonly id: string,
         readonly url: string,
-        readonly range: string | undefined,
+        readonly range?: string,
         readonly priority = 0,
-        readonly data: ArrayBuffer | undefined = undefined,
+        readonly data?: ArrayBuffer,
         readonly downloadSpeed = 0
     ) {}
 }
@@ -70,9 +70,18 @@ export enum Events {
 }
 
 export interface LoaderInterface {
-    on(eventName: string | symbol, listener: Function): this;
+    on(eventName: string, listener: Function): this;
     load(segments: Segment[], swarmId: string): void;
     getSegment(id: string): Segment | undefined;
     getSettings(): any;
+    getDetails(): any;
     destroy(): void;
+}
+
+export interface SegmentValidatorCallback {
+    (segment: Segment, method: "http" | "p2p", peerId?: string): Promise<void>;
+}
+
+export interface XhrSetupCallback {
+    (xhr: XMLHttpRequest, url: string): void;
 }
